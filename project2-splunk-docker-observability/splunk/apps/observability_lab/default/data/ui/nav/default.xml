@@ -1,0 +1,8 @@
+<nav search_view="search" color="#3C444D">
+  <view name="observability_overview" default="true" />
+  <view name="search" />
+  <collection label="Alerts and reports">
+    <a href="alerts">Alerts</a>
+    <a href="reports">Reports</a>
+  </collection>
+</nav>

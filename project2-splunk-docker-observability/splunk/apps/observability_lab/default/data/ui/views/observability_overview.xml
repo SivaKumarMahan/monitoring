@@ -1,0 +1,253 @@
+<dashboard version="2" theme="light">
+  <label>Observability Overview</label>
+  <description>HEC access logs from the lab log generator: traffic, errors and latency.</description>
+  <definition><![CDATA[
+{
+  "title": "Observability Overview",
+  "description": "HEC access logs from the lab log generator: traffic, errors and latency.",
+  "dataSources": {
+    "ds_total": {
+      "type": "ds.search",
+      "name": "Total requests",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" | stats count"
+      }
+    },
+    "ds_err": {
+      "type": "ds.search",
+      "name": "Error percent",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" | stats count AS total, sum(is_error) AS errors | eval error_pct=round(errors/total*100,2) | fields error_pct"
+      }
+    },
+    "ds_p95": {
+      "type": "ds.search",
+      "name": "p95 latency",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" | stats perc95(duration_ms) AS p95_ms | eval p95_ms=round(p95_ms,0)"
+      }
+    },
+    "ds_fired": {
+      "type": "ds.search",
+      "name": "Triggered alerts",
+      "options": {
+        "query": "| rest /servicesNS/-/observability_lab/alerts/fired_alerts splunk_server=local | search title!=\"-\" | stats count AS n, sum(triggered_alert_count) AS fired | fillnull value=0 fired | fields fired"
+      }
+    },
+    "ds_req_ts": {
+      "type": "ds.search",
+      "name": "Requests by status class",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" | timechart span=1m count BY status_class"
+      }
+    },
+    "ds_err_ts": {
+      "type": "ds.search",
+      "name": "Error percent by service",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" | timechart span=1m eval(round(sum(is_error)/count(status)*100,2)) AS error_pct BY service"
+      }
+    },
+    "ds_lat_ts": {
+      "type": "ds.search",
+      "name": "p95 latency by service",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" | timechart span=1m perc95(duration_ms) BY service"
+      }
+    },
+    "ds_top": {
+      "type": "ds.search",
+      "name": "Top failing endpoints",
+      "options": {
+        "query": "index=app_logs sourcetype=\"lab:app:json\" is_error=1 | stats count AS errors, latest(_time) AS last_seen BY service, path, status | sort - errors | head 10 | eval last_seen=strftime(last_seen, \"%F %T\")"
+      }
+    }
+  },
+  "visualizations": {
+    "viz_total": {
+      "type": "splunk.singlevalue",
+      "title": "Requests",
+      "dataSources": {
+        "primary": "ds_total"
+      }
+    },
+    "viz_err": {
+      "type": "splunk.singlevalue",
+      "title": "5xx error %",
+      "dataSources": {
+        "primary": "ds_err"
+      },
+      "options": {
+        "unit": "%"
+      }
+    },
+    "viz_p95": {
+      "type": "splunk.singlevalue",
+      "title": "p95 latency (ms)",
+      "dataSources": {
+        "primary": "ds_p95"
+      },
+      "options": {
+        "unit": "ms"
+      }
+    },
+    "viz_fired": {
+      "type": "splunk.singlevalue",
+      "title": "Triggered alerts (app)",
+      "dataSources": {
+        "primary": "ds_fired"
+      }
+    },
+    "viz_req_ts": {
+      "type": "splunk.column",
+      "title": "Requests per minute by status class",
+      "dataSources": {
+        "primary": "ds_req_ts"
+      },
+      "options": {
+        "stackMode": "stacked"
+      }
+    },
+    "viz_err_ts": {
+      "type": "splunk.line",
+      "title": "5xx error % by service (alert at 5%)",
+      "dataSources": {
+        "primary": "ds_err_ts"
+      }
+    },
+    "viz_lat_ts": {
+      "type": "splunk.line",
+      "title": "p95 latency (ms) by service (alert at 800 ms)",
+      "dataSources": {
+        "primary": "ds_lat_ts"
+      }
+    },
+    "viz_top": {
+      "type": "splunk.table",
+      "title": "Top failing endpoints",
+      "dataSources": {
+        "primary": "ds_top"
+      }
+    }
+  },
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time range",
+      "options": {
+        "token": "global_time",
+        "defaultValue": "-60m@m,now"
+      }
+    }
+  },
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {
+            "earliest": "$global_time.earliest$",
+            "latest": "$global_time.latest$"
+          }
+        }
+      }
+    }
+  },
+  "layout": {
+    "type": "absolute",
+    "options": {
+      "width": 1440,
+      "height": 760,
+      "display": "auto"
+    },
+    "globalInputs": [
+      "input_time"
+    ],
+    "structure": [
+      {
+        "item": "viz_total",
+        "type": "block",
+        "position": {
+          "x": 0,
+          "y": 0,
+          "w": 360,
+          "h": 150
+        }
+      },
+      {
+        "item": "viz_err",
+        "type": "block",
+        "position": {
+          "x": 360,
+          "y": 0,
+          "w": 360,
+          "h": 150
+        }
+      },
+      {
+        "item": "viz_p95",
+        "type": "block",
+        "position": {
+          "x": 720,
+          "y": 0,
+          "w": 360,
+          "h": 150
+        }
+      },
+      {
+        "item": "viz_fired",
+        "type": "block",
+        "position": {
+          "x": 1080,
+          "y": 0,
+          "w": 360,
+          "h": 150
+        }
+      },
+      {
+        "item": "viz_req_ts",
+        "type": "block",
+        "position": {
+          "x": 0,
+          "y": 150,
+          "w": 720,
+          "h": 300
+        }
+      },
+      {
+        "item": "viz_err_ts",
+        "type": "block",
+        "position": {
+          "x": 720,
+          "y": 150,
+          "w": 720,
+          "h": 300
+        }
+      },
+      {
+        "item": "viz_lat_ts",
+        "type": "block",
+        "position": {
+          "x": 0,
+          "y": 450,
+          "w": 720,
+          "h": 300
+        }
+      },
+      {
+        "item": "viz_top",
+        "type": "block",
+        "position": {
+          "x": 720,
+          "y": 450,
+          "w": 720,
+          "h": 300
+        }
+      }
+    ]
+  }
+}
+  ]]></definition>
+  <meta type="hiddenElements"><![CDATA[
+{"hideEdit": false, "hideOpenInSearch": false, "hideExport": false}
+  ]]></meta>
+</dashboard>

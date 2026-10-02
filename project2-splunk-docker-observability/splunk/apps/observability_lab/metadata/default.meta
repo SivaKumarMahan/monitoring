@@ -1,0 +1,13 @@
+# Everyone can read the app's objects. Only admins can change them.
+[]
+access = read : [ * ], write : [ admin ]
+
+# Share the sourcetype field extractions with every app (e.g. Search).
+[props]
+export = system
+
+[savedsearches]
+export = system
+
+[views]
+export = none

@@ -1,0 +1,72 @@
+# Splunk Enterprise (trial license) + a log generator that sends JSON to HEC.
+# Host ports: 18000 (Splunk Web), 18088 (HEC), 18089 (management/REST API).
+name: mon-splunk
+
+services:
+  # One-shot job: packages the app folder into a .tgz that Splunk installs on
+  # start (SPLUNK_APPS_URL). The app source is mounted read-only. It runs as
+  # root only because a fresh named volume is root-owned; it exits right away.
+  app-packager:
+    image: python:3.13-slim
+    container_name: mon-splunk-app-packager
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - tar -czf /pkg/observability_lab.tgz -C /src observability_lab && chmod 0644 /pkg/observability_lab.tgz && echo packaged
+    volumes:
+      - ./splunk/apps/observability_lab:/src/observability_lab:ro
+      - splunk-app-pkg:/pkg
+    restart: "no"
+
+  splunk:
+    image: splunk/splunk:10.6.0
+    container_name: mon-splunk-enterprise
+    hostname: mon-splunk
+    environment:
+      # Accepting the Splunk license and General Terms is your decision: set
+      # both values in .env only after reading them (see README).
+      SPLUNK_START_ARGS: ${SPLUNK_START_ARGS:?Set SPLUNK_START_ARGS=--accept-license in .env after reading the license}
+      SPLUNK_GENERAL_TERMS: ${SPLUNK_GENERAL_TERMS:?Set SPLUNK_GENERAL_TERMS in .env after reading the Splunk General Terms}
+      SPLUNK_PASSWORD: ${SPLUNK_PASSWORD:?Set SPLUNK_PASSWORD in .env (copy .env.example)}
+      # splunk-ansible creates this HEC token and enables HEC on :8088
+      SPLUNK_HEC_TOKEN: ${SPLUNK_HEC_TOKEN:?Set SPLUNK_HEC_TOKEN in .env (copy .env.example)}
+      # Config as code: install the app packaged by app-packager
+      SPLUNK_APPS_URL: /tmp/apps/observability_lab.tgz
+      TZ: UTC
+    ports:
+      - "18000:8000"
+      - "18088:8088"
+      - "18089:8089"
+    volumes:
+      - splunk-app-pkg:/tmp/apps:ro
+      - splunk-etc:/opt/splunk/etc
+      - splunk-var:/opt/splunk/var
+    mem_limit: 4g
+    restart: unless-stopped
+    depends_on:
+      app-packager:
+        condition: service_completed_successfully
+    # The image ships its own healthcheck (/sbin/checkstate.sh, 3 min start period)
+
+  log-generator:
+    build: ./log-generator
+    image: mon-splunk-log-generator:local
+    container_name: mon-splunk-log-generator
+    environment:
+      HEC_URL: https://splunk:8088
+      HEC_TOKEN: ${SPLUNK_HEC_TOKEN:?Set SPLUNK_HEC_TOKEN in .env}
+      HEC_INDEX: app_logs
+      EVENTS_PER_SECOND: ${EVENTS_PER_SECOND:-5}
+      ERROR_RATE: ${ERROR_RATE:-0.02}
+      LATENCY_MS: ${LATENCY_MS:-150}
+    mem_limit: 64m
+    restart: unless-stopped
+    depends_on:
+      splunk:
+        condition: service_healthy
+
+volumes:
+  splunk-app-pkg:
+  splunk-etc:
+  splunk-var:
