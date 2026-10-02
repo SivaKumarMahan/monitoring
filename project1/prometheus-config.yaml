@@ -7,6 +7,9 @@ data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: aks-demo
 
     scrape_configs:
       # Scrape Prometheus itself
@@ -14,15 +17,35 @@ data:
         static_configs:
           - targets: ['localhost:9090']
 
-      # Scrape node-exporter metrics via Kubernetes Service Discovery
+      # Scrape node-exporter metrics via Kubernetes service discovery.
+      # Uses EndpointSlices (the Endpoints API is deprecated since Kubernetes 1.33).
       - job_name: 'node-exporter'
         kubernetes_sd_configs:
-          - role: endpoints
+          - role: endpointslice
             namespaces:
               names:
                 - monitoring
         relabel_configs:
-          # Only keep targets with the label app=node-exporter
+          # Only keep targets behind a Service with the label app=node-exporter
           - source_labels: [__meta_kubernetes_service_label_app]
             regex: node-exporter
             action: keep
+          # Add a readable "node" label instead of only the IP:port
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+
+      # Container (pod) CPU/memory metrics from the kubelet's built-in cAdvisor.
+      # The kubelet uses a self-signed serving certificate on AKS, so TLS
+      # verification is skipped here. Auth uses the pod's service account token.
+      - job_name: 'kubernetes-cadvisor'
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          insecure_skip_verify: true
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node

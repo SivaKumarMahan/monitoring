@@ -1,0 +1,16 @@
+# Provisions the Prometheus data source so it exists on every Grafana start.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true

@@ -1,0 +1,13 @@
+# Apply everything in one go:  kubectl apply -k .
+# (Create the grafana-admin Secret first - see README.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - prometheus-rbac.yaml
+  - prometheus-config.yaml
+  - prometheus.yaml
+  - nodeExporter.yaml
+  - nodeExporter-service.yaml
+  - grafana-datasources.yaml
+  - grafana.yaml
