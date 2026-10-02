@@ -1,0 +1,64 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  project1-k8s:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: v0.6.7
+      PROMETHEUS_VERSION: 3.15.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform and promtool
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz kubeconform
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+      - name: kubeconform (rendered kustomization)
+        run: kubectl kustomize project1 | ./kubeconform -strict -summary -kubernetes-version 1.33.0 -
+      - name: promtool check config (from the ConfigMap)
+        run: |
+          python3 -c "import yaml; print(yaml.safe_load(open('project1/prometheus-config.yaml'))['data']['prometheus.yml'])" > prometheus.yml
+          ./promtool check config --syntax-only prometheus.yml
+      - name: shellcheck
+        run: shellcheck project1/create-aks.sh project2-splunk-docker-observability/scripts/verify.sh project3-prometheus-alerting/scripts/verify.sh
+
+  project2-splunk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project2-splunk-docker-observability
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose file and Python syntax
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          python3 -m py_compile log-generator/generator.py
+      - name: Dashboard Studio definition is valid XML and JSON
+        run: |
+          python3 - <<'PY'
+          import json, xml.dom.minidom
+          doc = xml.dom.minidom.parse("splunk/apps/observability_lab/default/data/ui/views/observability_overview.xml")
+          json.loads(doc.getElementsByTagName("definition")[0].firstChild.data)
+          print("dashboard OK")
+          PY
+
+  project3-alert-rules:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project3-prometheus-alerting
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint configs and rules
+        run: make check
+      - name: Alert rule unit tests
+        run: make test
