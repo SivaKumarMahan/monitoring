@@ -1,0 +1,12 @@
+# Local secrets (commit .env.example instead)
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+
+# Tool caches
+node_modules/
+.terraform/
+*.tgz

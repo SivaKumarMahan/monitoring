@@ -1,0 +1,10 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "ignorePaths": [".git/**", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.conf"],
+  "words": [
+    "aksdemo", "amtool", "cadvisor", "centralindia", "configmap", "daemonset", "kubeconfig", "kubeconform",
+    "kubelet", "kustomization", "pipefail", "promtool", "savedsearches", "shellcheck", "sourcetype",
+    "sourcetypes", "urlencode", "urlopen", "uuidgen"
+  ]
+}
