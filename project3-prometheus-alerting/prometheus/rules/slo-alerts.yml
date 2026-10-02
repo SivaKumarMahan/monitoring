@@ -1,0 +1,122 @@
+# SLO-style recording and alerting rules.
+#
+# Availability SLO: 99.5% of requests succeed (error budget = 0.5%).
+# Error-rate alerts use multi-window, multi-burn-rate checks
+# (Google SRE Workbook, chapter 5):
+#   fast burn: 14.4x budget over 1h AND 5m  -> page   (2% of 30-day budget in 1h)
+#   slow burn:  6x   budget over 6h AND 30m -> ticket (5% of 30-day budget in 6h)
+# Latency SLO: p95 below 500 ms.
+
+groups:
+  - name: slo-recording
+    rules:
+      - record: job:http_requests:rate5m
+        expr: sum by (job) (rate(http_requests_total[5m]))
+
+      - record: job:http_errors:ratio_rate5m
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[5m]))
+            /
+          sum by (job) (rate(http_requests_total[5m]))
+      - record: job:http_errors:ratio_rate30m
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[30m]))
+            /
+          sum by (job) (rate(http_requests_total[30m]))
+      - record: job:http_errors:ratio_rate1h
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[1h]))
+            /
+          sum by (job) (rate(http_requests_total[1h]))
+      - record: job:http_errors:ratio_rate6h
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[6h]))
+            /
+          sum by (job) (rate(http_requests_total[6h]))
+
+      - record: job:http_request_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (job, le) (rate(http_request_duration_seconds_bucket[5m])))
+
+  - name: slo-alerts
+    rules:
+      - alert: HighErrorRateFastBurn
+        expr: |
+          job:http_errors:ratio_rate1h > (14.4 * 0.005)
+            and
+          job:http_errors:ratio_rate5m > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} is burning its error budget fast"
+          description: "5xx ratio over 1h is {{ $value | humanizePercentage }} (SLO 99.5%, fast-burn threshold 7.2%)."
+          runbook_url: "https://example.com/runbooks/high-error-rate"
+
+      - alert: HighErrorRateSlowBurn
+        expr: |
+          job:http_errors:ratio_rate6h > (6 * 0.005)
+            and
+          job:http_errors:ratio_rate30m > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} is burning its error budget slowly"
+          description: "5xx ratio over 6h is {{ $value | humanizePercentage }} (slow-burn threshold 3%)."
+          runbook_url: "https://example.com/runbooks/high-error-rate"
+
+      - alert: HighLatencyP95
+        expr: job:http_request_duration_seconds:p95_5m > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} p95 latency is above 500 ms"
+          description: "p95 latency over 5m is {{ $value | humanizeDuration }}."
+          runbook_url: "https://example.com/runbooks/high-latency"
+
+  - name: infrastructure-alerts
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.instance }} ({{ $labels.job }}) is down"
+          description: "Prometheus could not scrape {{ $labels.instance }} for 2 minutes."
+          runbook_url: "https://example.com/runbooks/instance-down"
+
+      - alert: DiskWillFillIn4Hours
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint!~"/boot.*"}
+              / node_filesystem_size_bytes < 0.20
+          )
+          and
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint!~"/boot.*"}[1h], 4 * 3600) < 0
+          and
+          node_filesystem_readonly == 0
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} will fill within 4 hours"
+          description: "Less than 20% free and the 1h trend reaches 0 bytes within 4 hours."
+          runbook_url: "https://example.com/runbooks/disk-filling"
+
+      - alert: DiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint!~"/boot.*"}
+            / node_filesystem_size_bytes < 0.10
+          and
+          node_filesystem_readonly == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} has less than 10% free"
+          description: "Free space is {{ $value | humanizePercentage }}."
+          runbook_url: "https://example.com/runbooks/disk-filling"

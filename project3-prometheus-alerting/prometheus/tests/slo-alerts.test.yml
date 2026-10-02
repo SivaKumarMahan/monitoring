@@ -1,0 +1,239 @@
+# Unit tests for prometheus/rules/slo-alerts.yml
+# Run:  promtool test rules prometheus/tests/slo-alerts.test.yml
+rule_files:
+  - ../rules/slo-alerts.yml
+
+evaluation_interval: 1m
+# Compare floats with a small tolerance (0.1 vs 0.09999999999999999)
+fuzzy_compare: true
+
+tests:
+  # --- Recording rules -------------------------------------------------------
+  - name: error ratio recording rule
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="demo-app",code="200"}'
+        values: '0+90x30'
+      - series: 'http_requests_total{job="demo-app",code="500"}'
+        values: '0+10x30'
+    promql_expr_test:
+      - expr: job:http_errors:ratio_rate5m
+        eval_time: 20m
+        exp_samples:
+          - labels: 'job:http_errors:ratio_rate5m{job="demo-app"}'
+            value: 0.1
+
+  # --- Fast burn -------------------------------------------------------------
+  - name: fast burn fires on a sustained 14% error ratio
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="demo-app",code="200"}'
+        values: '0+60x120'
+      - series: 'http_requests_total{job="demo-app",code="500"}'
+        values: '0+10x120'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HighErrorRateFastBurn
+        exp_alerts: []  # still pending: "for: 2m" not reached
+      - eval_time: 10m
+        alertname: HighErrorRateFastBurn
+        exp_alerts:
+          - exp_labels:
+              alertname: HighErrorRateFastBurn
+              job: demo-app
+              severity: page
+            exp_annotations:
+              summary: "demo-app is burning its error budget fast"
+              description: "5xx ratio over 1h is 14.29% (SLO 99.5%, fast-burn threshold 7.2%)."
+              runbook_url: "https://example.com/runbooks/high-error-rate"
+
+  - name: fast burn stays quiet at a 0.1% error ratio
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="demo-app",code="200"}'
+        values: '0+1000x90'
+      - series: 'http_requests_total{job="demo-app",code="500"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: HighErrorRateFastBurn
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: HighErrorRateSlowBurn
+        exp_alerts: []
+
+  - name: fast burn ignores a 2-minute spike (1h window is still healthy)
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="demo-app",code="200"}'
+        values: '0+60x100'
+      # no errors for 60m, 60 errors/min at 61m and 62m, then none again
+      - series: 'http_requests_total{job="demo-app",code="500"}'
+        values: '0x60 60 120 120x37'
+    alert_rule_test:
+      - eval_time: 64m
+        alertname: HighErrorRateFastBurn
+        exp_alerts: []
+
+  # --- Slow burn -------------------------------------------------------------
+  - name: slow burn fires on a steady 4% error ratio
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="demo-app",code="200"}'
+        values: '0+96x420'
+      - series: 'http_requests_total{job="demo-app",code="500"}'
+        values: '0+4x420'
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: HighErrorRateSlowBurn
+        exp_alerts:
+          - exp_labels:
+              alertname: HighErrorRateSlowBurn
+              job: demo-app
+              severity: ticket
+            exp_annotations:
+              summary: "demo-app is burning its error budget slowly"
+              description: "5xx ratio over 6h is 4% (slow-burn threshold 3%)."
+              runbook_url: "https://example.com/runbooks/high-error-rate"
+      - eval_time: 390m
+        alertname: HighErrorRateFastBurn
+        exp_alerts: []  # 4% is below the 7.2% fast-burn threshold
+
+  # --- Latency ---------------------------------------------------------------
+  - name: p95 latency above 500 ms fires after 10 minutes
+    interval: 1m
+    input_series:
+      # 100 requests/min; 90 are <= 1s, 10 are between 1s and 2.5s -> p95 = 1.75s
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="0.1"}'
+        values: '0+10x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="0.25"}'
+        values: '0+20x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="0.5"}'
+        values: '0+40x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="1"}'
+        values: '0+90x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="2.5"}'
+        values: '0+100x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="+Inf"}'
+        values: '0+100x30'
+    promql_expr_test:
+      # round() hides float noise from histogram interpolation (1.7499999...)
+      - expr: round(job:http_request_duration_seconds:p95_5m, 0.001)
+        eval_time: 15m
+        exp_samples:
+          - labels: '{job="demo-app"}'
+            value: 1.75
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HighLatencyP95
+        exp_alerts: []  # pending
+      - eval_time: 15m
+        alertname: HighLatencyP95
+        exp_alerts:
+          - exp_labels:
+              alertname: HighLatencyP95
+              job: demo-app
+              severity: ticket
+            exp_annotations:
+              summary: "demo-app p95 latency is above 500 ms"
+              description: "p95 latency over 5m is 1.75s."
+              runbook_url: "https://example.com/runbooks/high-latency"
+
+  - name: p95 latency below 500 ms stays quiet
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="0.1"}'
+        values: '0+90x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="0.25"}'
+        values: '0+97x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="0.5"}'
+        values: '0+99x30'
+      - series: 'http_request_duration_seconds_bucket{job="demo-app",handler="/api/orders",le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HighLatencyP95
+        exp_alerts: []
+
+  # --- Instance down ---------------------------------------------------------
+  - name: instance down fires after 2 minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="node-exporter:9100"}'
+        values: '1 1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: InstanceDown
+        exp_alerts: []  # down for only 1 minute
+      - eval_time: 5m
+        alertname: InstanceDown
+        exp_alerts:
+          - exp_labels:
+              alertname: InstanceDown
+              job: node
+              instance: node-exporter:9100
+              severity: page
+            exp_annotations:
+              summary: "node-exporter:9100 (node) is down"
+              description: "Prometheus could not scrape node-exporter:9100 for 2 minutes."
+              runbook_url: "https://example.com/runbooks/instance-down"
+
+  # --- Disk ------------------------------------------------------------------
+  - name: disk filling fast fires before it is critically low
+    interval: 1m
+    input_series:
+      # 100 GB disk, 15 GB free, losing 100 MB per minute (empty in ~2.5h)
+      - series: 'node_filesystem_avail_bytes{job="node",instance="node-exporter:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '15e9-1e8x120'
+      - series: 'node_filesystem_size_bytes{job="node",instance="node-exporter:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '100e9x120'
+      - series: 'node_filesystem_readonly{job="node",instance="node-exporter:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DiskWillFillIn4Hours
+        exp_alerts:
+          - exp_labels:
+              alertname: DiskWillFillIn4Hours
+              severity: page
+              job: node
+              instance: node-exporter:9100
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: "Disk / on node-exporter:9100 will fill within 4 hours"
+              description: "Less than 20% free and the 1h trend reaches 0 bytes within 4 hours."
+              runbook_url: "https://example.com/runbooks/disk-filling"
+      - eval_time: 30m
+        alertname: DiskSpaceLow
+        exp_alerts: []  # 12% free: not below 10% yet
+      - eval_time: 65m
+        alertname: DiskSpaceLow
+        exp_alerts:
+          - exp_labels:
+              alertname: DiskSpaceLow
+              severity: ticket
+              job: node
+              instance: node-exporter:9100
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: "Disk / on node-exporter:9100 has less than 10% free"
+              description: "Free space is 8.5%."
+              runbook_url: "https://example.com/runbooks/disk-filling"
+
+  - name: disk with stable usage does not fire the fill-up alert
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node",instance="node-exporter:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '15e9x120'
+      - series: 'node_filesystem_size_bytes{job="node",instance="node-exporter:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '100e9x120'
+      - series: 'node_filesystem_readonly{job="node",instance="node-exporter:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: DiskWillFillIn4Hours
+        exp_alerts: []

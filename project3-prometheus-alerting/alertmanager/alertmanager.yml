@@ -1,0 +1,55 @@
+# Alertmanager routing for the local lab.
+# Every alert goes to the demo-app webhook, which prints it to its log.
+# In a real setup "page" would go to PagerDuty/Opsgenie and "ticket" to
+# Slack or Jira. Keep their keys in a secret file, not in this repo.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default-webhook
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: pager-webhook
+      matchers:
+        - severity = "page"
+      repeat_interval: 1h
+    - receiver: ticket-webhook
+      matchers:
+        - severity = "ticket"
+      repeat_interval: 12h
+
+receivers:
+  - name: default-webhook
+    webhook_configs:
+      - url: http://demo-app:8080/webhook
+        send_resolved: true
+  - name: pager-webhook
+    webhook_configs:
+      - url: http://demo-app:8080/webhook
+        send_resolved: true
+  - name: ticket-webhook
+    webhook_configs:
+      - url: http://demo-app:8080/webhook
+        send_resolved: true
+  # Example for Slack (needs a real webhook URL kept in a secret file):
+  # - name: ticket-slack
+  #   slack_configs:
+  #     - api_url_file: /etc/alertmanager/secrets/slack-webhook-url
+  #       channel: '#alerts'
+
+inhibit_rules:
+  # If a target is down, do not also send its error-rate or latency alerts.
+  - source_matchers:
+      - alertname = "InstanceDown"
+    target_matchers:
+      - alertname =~ "HighErrorRate.*|HighLatencyP95"
+    equal: ['job']
+  # A fast-burn page already covers the problem; drop the slow-burn ticket.
+  - source_matchers:
+      - alertname = "HighErrorRateFastBurn"
+    target_matchers:
+      - alertname = "HighErrorRateSlowBurn"
+    equal: ['job']
